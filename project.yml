@@ -1,0 +1,25 @@
+
+name: QuickPanel
+
+options:
+  bundleIdPrefix: com.quickpanel
+  deploymentTarget:
+    iOS: "17.0"
+
+targets:
+  QuickPanel:
+    type: application
+    platform: iOS
+
+    sources:
+      - Sources
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quickpanel.personal
+        PRODUCT_NAME: QuickPanel
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: QuickPanel
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
