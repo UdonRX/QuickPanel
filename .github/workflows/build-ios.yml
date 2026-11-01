@@ -1,0 +1,49 @@
+name: Build QuickPanel for iPhone
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Get source code
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build iPhone app
+        run: |
+          xcodebuild \
+            -project QuickPanel.xcodeproj \
+            -scheme QuickPanel \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package IPA
+        run: |
+          mkdir -p dist/Payload
+          cp -R build/Build/Products/Release-iphoneos/QuickPanel.app dist/Payload/
+          cd dist
+          zip -r QuickPanel-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuickPanel-unsigned-IPA
+          path: dist/QuickPanel-unsigned.ipa
+          retention-days: 7
