@@ -37,7 +37,11 @@ jobs:
       - name: Package IPA
         run: |
           mkdir -p dist/Payload
-          cp -R build/Build/Products/Release-iphoneos/QuickPanel.app dist/Payload/
+          APP_PATH=build/Build/Products/Release-iphoneos/QuickPanel.app
+          test -d "$APP_PATH"
+          echo "Checking embedded LockedCameraCapture extension..."
+          find "$APP_PATH" -name "CaptureExtension.appex" -print -quit | grep -q .
+          cp -R "$APP_PATH" dist/Payload/
           cd dist
           zip -r QuickPanel-unsigned.ipa Payload
 

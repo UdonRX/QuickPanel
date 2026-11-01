@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import Combine
+import AVFoundation
 
 enum ButtonKind:String,CaseIterable,Codable,Identifiable {
     case app="アプリ",shortcut="ショートカット",setting="設定・操作",workflow="アクション"
@@ -106,6 +107,7 @@ struct MainView:View {
     @State private var isEditing=false
     @State private var showResult=false
     @State private var resultText=""
+    @State private var shouldOpenCamera=false
     private let spacing:CGFloat=10
     private let sidePadding:CGFloat=16
     var body:some View{
@@ -165,7 +167,19 @@ struct MainView:View {
                 }
             }
             .alert("実行結果",isPresented:$showResult){Button("OK",role:.cancel){}}message:{Text(resultText)}
+            .onAppear{requestCameraPermissionIfNeeded()}
+            .onReceive(NotificationCenter.default.publisher(for:.cameraControlDidActivate)){_ in
+                shouldOpenCamera=true
+            }
+            .fullScreenCover(isPresented:$shouldOpenCamera){
+                QuickPanelCameraPicker{shouldOpenCamera=false}
+                    .ignoresSafeArea()
+            }
         }
+    }
+    private func requestCameraPermissionIfNeeded(){
+        guard AVCaptureDevice.authorizationStatus(for:.video) == .notDetermined else{return}
+        AVCaptureDevice.requestAccess(for:.video){_ in}
     }
     private var maxRow:Int{panelStore.buttons.map{$0.row+$0.size.rows}.max() ?? 3}
     private func edit(_ item:PanelButton){
