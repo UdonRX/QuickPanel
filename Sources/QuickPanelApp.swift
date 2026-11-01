@@ -6,6 +6,13 @@ enum ButtonKind:String,CaseIterable,Codable,Identifiable {
     case app="アプリ",shortcut="ショートカット",setting="設定・操作",workflow="アクション"
     var id:String{rawValue}
 }
+enum AppLaunchMethod:String,CaseIterable,Codable,Identifiable {
+    case bundleIdentifier="Bundle IDから起動"
+    case urlScheme="URLスキームで起動"
+    case universalLink="URL / Universal Linkで起動"
+    case shortcut="ショートカットで起動"
+    var id:String{rawValue}
+}
 enum TileSize:String,CaseIterable,Codable,Identifiable {
     case small="1×1",wide="2×1",large="2×2"
     var id:String{rawValue}
@@ -22,18 +29,13 @@ struct PanelButton:Identifiable,Codable {
     var size:TileSize = .small
     var column:Int=0
     var row:Int=0
+    var launchMethod:AppLaunchMethod?=nil
+    var bundleIdentifier:String?=nil
+    var shortcutName:String?=nil
 }
 struct AppPreset:Identifiable {
     let id:String;let name:String;let url:String;let icon:String
 }
-private let appPresets:[AppPreset]=[
-    .init(id:"safari",name:"Safari（Web）",url:"https://www.apple.com",icon:"safari"),
-    .init(id:"maps",name:"マップ",url:"maps://",icon:"map"),
-    .init(id:"settings",name:"設定",url:"app-settings:",icon:"gear"),
-    .init(id:"phone",name:"電話",url:"tel:",icon:"phone"),
-    .init(id:"mail",name:"メール",url:"mailto:",icon:"envelope"),
-    .init(id:"messages",name:"メッセージ",url:"sms:",icon:"message")
-]
 @MainActor final class PanelStore:ObservableObject {
     @Published var buttons:[PanelButton]=[] { didSet{save()} }
     private let key="QuickPanel.Buttons.v2"
@@ -178,10 +180,23 @@ struct MainView:View {
                 resultText=errors.isEmpty ? "「\(workflow.title)」を実行したよ。\n\(report.logs.count)件の処理が完了。":errors.map{"\($0.actionTitle)：\($0.message)"}.joined(separator:"\n")
                 showResult=true
             }
-        }else if item.kind == .shortcut || item.kind == .setting{
-            var c=URLComponents();c.scheme="shortcuts";c.host="run-shortcut";c.queryItems=[URLQueryItem(name:"name",value:item.target)]
-            if let url=c.url{UIApplication.shared.open(url)}
-        }else if let url=URL(string:item.target){UIApplication.shared.open(url)}
+        }else{
+            let method=item.launchMethod ?? (item.kind == .shortcut || item.kind == .setting ? .shortcut : .urlScheme)
+            if method == .shortcut {
+                let name=item.shortcutName ?? item.target
+                var c=URLComponents();c.scheme="shortcuts";c.host="run-shortcut";c.queryItems=[URLQueryItem(name:"name",value:name)]
+                if let url=c.url{UIApplication.shared.open(url)}
+            } else {
+                let raw:String
+                if method == .bundleIdentifier {
+                    let identifier=(item.bundleIdentifier ?? item.target).trimmingCharacters(in:.whitespacesAndNewlines)
+                    let clean=identifier.hasSuffix("://") ? String(identifier.dropLast(3)):identifier
+                    raw=clean+"://"
+                } else { raw=item.target }
+                guard let url=URL(string:raw),url.scheme != nil else{resultText="起動先URLが正しくありません";showResult=true;return}
+                UIApplication.shared.open(url)
+            }
+        }
     }
 }
 
@@ -223,7 +238,20 @@ struct TileView:View {
             .overlay{if editing{RoundedRectangle(cornerRadius:20).stroke(.white.opacity(0.35),style:StrokeStyle(lineWidth:1,dash:[5]))}}
         }
         .buttonStyle(.plain).offset(dragOffset)
-        .simultaneousGesture(DragGesture(minimumDistance:12).onChanged{v in if editing{dragOffset=v.translation}}.onEnded{v in if editing{moveAction(v.translation.width,v.translation.height)};dragOffset = .zero})
+        .gesture(
+            LongPressGesture(minimumDuration:0.32)
+                .sequenced(before:DragGesture(minimumDistance:0))
+                .onChanged{value in
+                    guard editing else{return}
+                    if case .second(true,let drag?)=value{dragOffset=drag.translation}
+                }
+                .onEnded{value in
+                    if editing,case .second(true,let drag?)=value{
+                        moveAction(drag.translation.width,drag.translation.height)
+                    }
+                    dragOffset = .zero
+                }
+        )
         .contextMenu{
             Button("編集",systemImage:"pencil",action:editAction)
             Button("複製",systemImage:"plus.square.on.square",action:duplicateAction)
@@ -237,7 +265,10 @@ struct AppTileEditor:View {
     let onSave:(PanelButton)->Void
     @Environment(\.dismiss) private var dismiss
     @State private var title=""
-    @State private var target=""
+    @State private var launchMethod:AppLaunchMethod = .bundleIdentifier
+    @State private var bundleIdentifier=""
+    @State private var urlValue=""
+    @State private var shortcutName=""
     @State private var icon="app"
     @State private var color=0
     @State private var size:TileSize = .small
@@ -248,17 +279,23 @@ struct AppTileEditor:View {
             Form{
                 Section("基本情報"){
                     TextField("タイル名",text:$title)
-                    TextField("URL・アプリの起動先",text:$target).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Text("iOSはインストール済みアプリ一覧を一般アプリに公開していないため、候補またはアプリ提供元のURLを指定してね。").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("候補"){
-                    ForEach(appPresets){preset in
-                        Button{
-                            target=preset.url;icon=preset.icon
-                            if title.isEmpty{title=preset.name}
-                        }label:{
-                            HStack{Image(systemName:preset.icon).frame(width:28);Text(preset.name);Spacer();if target==preset.url{Image(systemName:"checkmark")}}
-                        }.foregroundStyle(.primary)
+                    Picker("起動方法",selection:$launchMethod){
+                        ForEach(AppLaunchMethod.allCases){method in Text(method.rawValue).tag(method)}
+                    }
+                    switch launchMethod{
+                    case .bundleIdentifier:
+                        TextField("Bundle ID",text:$bundleIdentifier).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Text("入力したBundle IDの末尾に自動で「://」を付けて起動するよ。例：com.example.app://").font(.caption).foregroundStyle(.secondary)
+                        Text("※アプリ側がBundle IDと同じURLスキームを登録している場合だけ起動できるよ。Bundle IDだけで起動できるわけではないよ。").font(.caption).foregroundStyle(.orange)
+                    case .urlScheme:
+                        TextField("URLスキーム",text:$urlValue,prompt:Text("例：maps://")).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Text("アプリが対応しているURLスキームを入力してね。").font(.caption).foregroundStyle(.secondary)
+                    case .universalLink:
+                        TextField("URL",text:$urlValue,prompt:Text("https://example.com")).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Text("対応アプリがあるUniversal Linkならそのアプリが開き、なければWebページが開くよ。").font(.caption).foregroundStyle(.secondary)
+                    case .shortcut:
+                        TextField("ショートカット名",text:$shortcutName)
+                        Text("ショートカットアプリで作成した名前を正確に入力してね。実行時はショートカットアプリに切り替わる場合があるよ。").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Section("タイルサイズ"){
@@ -280,19 +317,57 @@ struct AppTileEditor:View {
                     Picker("カラー",selection:$color){Text("ブルー").tag(0);Text("グリーン").tag(1);Text("パープル").tag(2);Text("オレンジ").tag(3);Text("シアン").tag(4)}
                 }
             }
-            .navigationTitle(existing == nil ? "アプリタイル追加":"タイル編集").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(existing == nil ? "起動タイル追加":"タイル編集").navigationBarTitleDisplayMode(.inline)
             .toolbar{
                 ToolbarItem(placement:.cancellationAction){Button("キャンセル"){dismiss()}}
                 ToolbarItem(placement:.confirmationAction){
                     Button("保存"){
-                        onSave(PanelButton(id:existing?.id ?? UUID(),title:title.trimmingCharacters(in:.whitespacesAndNewlines),kind:existing?.kind ?? .app,target:target.trimmingCharacters(in:.whitespacesAndNewlines),icon:icon,colorIndex:color,size:size,column:column,row:row))
+                        let target:String
+                        let kind:ButtonKind
+                        let savedBundleID:String?
+                        let savedShortcut:String?
+                        switch launchMethod{
+                        case .bundleIdentifier:
+                            let clean=bundleIdentifier.trimmingCharacters(in:.whitespacesAndNewlines)
+                            let identifier=clean.hasSuffix("://") ? String(clean.dropLast(3)):clean
+                            target=identifier+"://";kind = .app;savedBundleID=identifier;savedShortcut=nil
+                        case .urlScheme:
+                            target=urlValue.trimmingCharacters(in:.whitespacesAndNewlines);kind = .app;savedBundleID=nil;savedShortcut=nil
+                        case .universalLink:
+                            let raw=urlValue.trimmingCharacters(in:.whitespacesAndNewlines)
+                            target=(raw.contains("://") ? raw:"https://"+raw);kind = .app;savedBundleID=nil;savedShortcut=nil
+                        case .shortcut:
+                            target=shortcutName.trimmingCharacters(in:.whitespacesAndNewlines);kind = .shortcut;savedBundleID=nil;savedShortcut=target
+                        }
+                        onSave(PanelButton(id:existing?.id ?? UUID(),title:title.trimmingCharacters(in:.whitespacesAndNewlines),kind:kind,target:target,icon:icon,colorIndex:color,size:size,column:column,row:row,launchMethod:launchMethod,bundleIdentifier:savedBundleID,shortcutName:savedShortcut))
                         dismiss()
-                    }.disabled(title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || target.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                    }.disabled(!canSave)
                 }
             }
-            .onAppear{guard let existing else{return};title=existing.title;target=existing.target;icon=existing.icon;color=existing.colorIndex;size=existing.size;column=existing.column;row=existing.row}
+            .onAppear{loadExisting()}
             .onChange(of:size){column=min(column,4-size.columns)}
         }.preferredColorScheme(.dark)
+    }
+    private var canSave:Bool{
+        guard !title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{return false}
+        switch launchMethod{
+        case .bundleIdentifier:return !bundleIdentifier.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty
+        case .urlScheme,.universalLink:return !urlValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty
+        case .shortcut:return !shortcutName.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty
+        }
+    }
+    private func loadExisting(){
+        guard let existing else{return}
+        title=existing.title;icon=existing.icon;color=existing.colorIndex;size=existing.size;column=existing.column;row=existing.row
+        if let method=existing.launchMethod{
+            launchMethod=method;bundleIdentifier=existing.bundleIdentifier ?? ""
+            shortcutName=existing.shortcutName ?? (method == .shortcut ? existing.target:"")
+            urlValue=method == .urlScheme || method == .universalLink ? existing.target:""
+        }else if existing.kind == .shortcut || existing.kind == .setting{
+            launchMethod = .shortcut;shortcutName=existing.shortcutName ?? existing.target
+        }else if existing.target.lowercased().hasPrefix("http://") || existing.target.lowercased().hasPrefix("https://"){
+            launchMethod = .universalLink;urlValue=existing.target
+        }else{launchMethod = .urlScheme;urlValue=existing.target}
     }
 }
 

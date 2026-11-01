@@ -101,11 +101,21 @@ enum ActionExecutionError:LocalizedError {
         }
         register(type:"app.openURL"){[weak self] a,_ in
             guard let self else{return nil}
-            let custom=try self.string(a,"customURL",required:false)
-            let raw=custom.isEmpty ? try self.string(a,"destination"):custom
-            guard let url=URL(string:raw),let scheme=url.scheme,!scheme.isEmpty else{throw ActionExecutionError.invalidURL(raw)}
+            let raw=try self.string(a,"destination")
+            let normalized=(raw.contains("://") || raw.hasPrefix("mailto:") || raw.hasPrefix("tel:") || raw.hasPrefix("sms:")) ? raw:"https://"+raw
+            guard let url=URL(string:normalized),let scheme=url.scheme,!scheme.isEmpty else{throw ActionExecutionError.invalidURL(raw)}
             let ok=await UIApplication.shared.open(url)
             if !ok{throw ActionExecutionError.operationFailed("アプリまたはURLを開けませんでした")}
+            return .string(url.absoluteString)
+        }
+        register(type:"app.openBundleID"){[weak self] a,_ in
+            guard let self else{return nil}
+            let raw=try self.string(a,"bundleID")
+            let clean=raw.hasSuffix("://") ? String(raw.dropLast(3)):raw
+            let scheme=clean+"://"
+            guard let url=URL(string:scheme),url.scheme != nil else{throw ActionExecutionError.invalidURL(raw)}
+            let ok=await UIApplication.shared.open(url)
+            if !ok{throw ActionExecutionError.operationFailed("Bundle IDと同じURLスキームで起動できませんでした。アプリがそのURLスキームに対応しているか確認してね")}
             return .string(url.absoluteString)
         }
         register(type:"app.openSettings"){[weak self] a,_ in
@@ -188,7 +198,18 @@ enum ActionExecutionError:LocalizedError {
         }
         register(type:"system.shortcutFallback"){[weak self] a,_ in
             guard let self else{return nil}
-            let name=try self.string(a,"shortcutName")
+            let operation=try self.string(a,"operation",required:false)
+            let enteredName=try self.string(a,"shortcutName",required:false)
+            let defaultNames=[
+                "wifiOn":"Wi-Fiをオン","wifiOff":"Wi-Fiをオフ",
+                "bluetoothOn":"Bluetoothをオン","bluetoothOff":"Bluetoothをオフ",
+                "cellularOn":"モバイル通信をオン","cellularOff":"モバイル通信をオフ",
+                "silentOn":"消音モードをオン","silentOff":"消音モードをオフ",
+                "focusOn":"集中モードをオン","focusOff":"集中モードをオフ",
+                "airplaneOn":"機内モードをオン","airplaneOff":"機内モードをオフ"
+            ]
+            let name=enteredName.isEmpty ? (defaultNames[operation] ?? ""):enteredName
+            guard !name.isEmpty else{throw ActionExecutionError.missingParameter("ショートカット名")}
             var c=URLComponents();c.scheme="shortcuts";c.host="run-shortcut";c.queryItems=[URLQueryItem(name:"name",value:name)]
             guard let url=c.url else{throw ActionExecutionError.invalidURL(name)}
             let ok=await UIApplication.shared.open(url)

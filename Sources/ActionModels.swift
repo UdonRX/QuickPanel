@@ -123,9 +123,11 @@ enum ActionCatalog {
     }
     private static func o(_ title:String,_ value:String)->ActionFieldOption{.init(title:title,value:value)}
     static let all:[ActionDescriptor] = [
-        .init(type:"app.openURL",category:.appScreen,title:"アプリ・URLを開く",description:"アプリのURLまたはWebアドレスを開く",fields:[
-            f("destination","開く先",.appPicker,true,nil,[o("Safari（Web）","https://www.apple.com"),o("マップ","maps://"),o("設定","app-settings:"),o("電話","tel:"),o("メール","mailto:"),o("メッセージ","sms:")]),
-            f("customURL","またはURLを指定",.url,false,"https:// または myapp://")
+        .init(type:"app.openURL",category:.appScreen,title:"URL・URLスキームを開く",description:"入力したURLやアプリのURLスキームを開く",fields:[
+            f("destination","開くURL / URLスキーム",.url,true,"https://example.com または maps://")
+        ]),
+        .init(type:"app.openBundleID",category:.appScreen,title:"Bundle IDからアプリを開く",description:"Bundle IDに://を付けたURLスキームで起動を試す",fields:[
+            f("bundleID","Bundle ID",.shortText,true,"com.example.app")
         ]),
         .init(type:"app.openSettings",category:.appScreen,title:"設定画面を開く",description:"iOSの設定画面を表示",fields:[
             f("setting","設定画面",.choice,true,nil,[o("QuickPanelの設定","app"),o("Wi-Fi設定","wifi"),o("Bluetooth設定","bluetooth"),o("通知設定","notifications"),o("一般設定","general")])
@@ -146,9 +148,17 @@ enum ActionCatalog {
         .init(type:"information.notify",category:.information,title:"通知を表示",description:"QuickPanelからiPhoneに通知",fields:[f("title","通知タイトル",.shortText,true),f("message","通知内容",.multilineText,true)]),
         .init(type:"system.openSettings",category:.system,title:"設定画面を開く",description:"iOS設定画面を開く",fields:[f("setting","設定画面",.systemSettingPicker,true,nil,[o("QuickPanelの設定","app"),o("Wi-Fi","wifi"),o("Bluetooth","bluetooth"),o("通知","notifications"),o("一般","general")])]),
         .init(type:"system.torch",category:.system,title:"ライトをON/OFF",description:"iPhoneのカメラライトを直接操作",fields:[f("enabled","ライトを点灯する",.toggle)]),
-        .init(type:"system.shortcutFallback",category:.system,title:"ショートカットで設定操作",description:"アプリ単体で操作できない設定をショートカットに任せる",fields:[
-            f("operation","設定操作",.choice,true,nil,[o("Wi-Fiをオン","wifiOn"),o("Wi-Fiをオフ","wifiOff"),o("Bluetoothをオン","bluetoothOn"),o("Bluetoothをオフ","bluetoothOff"),o("その他","other")]),
-            f("shortcutName","実行するショートカット名",.shortText,true,"Wi-Fiをオン")
+        .init(type:"system.shortcutFallback",category:.system,title:"ショートカットで設定を切り替える",description:"Wi-Fi・Bluetooth・モバイル通信・消音モード・集中モードなどを、対応するショートカット経由で操作",fields:[
+            f("operation","設定操作",.choice,true,nil,[
+                o("Wi-Fiをオン","wifiOn"),o("Wi-Fiをオフ","wifiOff"),
+                o("Bluetoothをオン","bluetoothOn"),o("Bluetoothをオフ","bluetoothOff"),
+                o("モバイル通信をオン","cellularOn"),o("モバイル通信をオフ","cellularOff"),
+                o("消音モードをオン","silentOn"),o("消音モードをオフ","silentOff"),
+                o("集中モードをオン","focusOn"),o("集中モードをオフ","focusOff"),
+                o("機内モードをオン","airplaneOn"),o("機内モードをオフ","airplaneOff"),
+                o("その他","other")
+            ]),
+            f("shortcutName","実行するショートカット名（任意）",.shortText,false,"未入力なら選択した設定名を使用")
         ])
     ]
     static func actions(in category:ActionCategory)->[ActionDescriptor]{all.filter{$0.category==category}}
