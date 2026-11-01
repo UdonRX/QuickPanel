@@ -327,9 +327,12 @@ struct MainView: View {
                                 deleteAction: {
                                     store.delete(item)
                                 },
-                         moveAction: { x, y in
-    let col = item.column + Int(round(x / rowHeight))
-    let row = item.row + Int(round(y / rowHeight))
+                                moveAction: { x, y in
+                                    let col = Int(
+                                        round(x / rowHeight)
+                                    )
+                                    let row = Int(
+                                        round(y / rowHeight)
                                     )
 
                                     store.move(
@@ -508,21 +511,21 @@ struct TileView: View {
             }
         }
         .offset(dragOffset)
-.simultaneousGesture(
-    DragGesture(minimumDistance: editing ? 5 : 100000)
-        .onChanged { value in
-            dragOffset = value.translation
-        }
-        .onEnded { value in
-            if editing {
-                moveAction(
-                    value.translation.width,
-                    value.translation.height
-                )
-            }
-            dragOffset = .zero
-        }
-)
+        .gesture(
+            editing
+            ? DragGesture()
+                .onChanged { value in
+                    dragOffset = value.translation
+                }
+                .onEnded { value in
+                    moveAction(
+                        value.translation.width,
+                        value.translation.height
+                    )
+                    dragOffset = .zero
+                }
+            : nil
+        )
         .onTapGesture {
             if !editing {
                 execute()
