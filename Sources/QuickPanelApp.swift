@@ -1,799 +1,437 @@
-
 import SwiftUI
 import UIKit
 import Combine
 
-// MARK: - Models
-
-enum ButtonKind: String, CaseIterable, Codable, Identifiable {
-    case app = "アプリ"
-    case shortcut = "ショートカット"
-    case setting = "設定・操作"
-
-    var id: String { rawValue }
+enum ButtonKind:String,CaseIterable,Codable,Identifiable {
+    case app="アプリ",shortcut="ショートカット",setting="設定・操作",workflow="アクション"
+    var id:String{rawValue}
 }
-
-enum TileSize: String, CaseIterable, Codable, Identifiable {
-    case small = "1×1"
-    case wide = "2×1"
-    case large = "2×2"
-
-    var id: String { rawValue }
-
-    var columns: Int {
-        switch self {
-        case .small: return 1
-        case .wide, .large: return 2
-        }
-    }
-
-    var rows: Int {
-        switch self {
-        case .small, .wide: return 1
-        case .large: return 2
-        }
-    }
+enum TileSize:String,CaseIterable,Codable,Identifiable {
+    case small="1×1",wide="2×1",large="2×2"
+    var id:String{rawValue}
+    var columns:Int{self == .small ? 1:2}
+    var rows:Int{self == .large ? 2:1}
 }
-
-struct PanelButton: Identifiable, Codable {
-    var id: UUID = UUID()
-    var title: String
-    var kind: ButtonKind
-    var target: String
-    var icon: String
-    var colorIndex: Int
-    var size: TileSize = .small
-    var column: Int = 0
-    var row: Int = 0
+struct PanelButton:Identifiable,Codable {
+    var id:UUID=UUID()
+    var title:String
+    var kind:ButtonKind
+    var target:String
+    var icon:String
+    var colorIndex:Int
+    var size:TileSize = .small
+    var column:Int=0
+    var row:Int=0
 }
-
-// MARK: - App presets
-
-struct AppPreset: Identifiable {
-    let id: String
-    let name: String
-    let scheme: String
-    let icon: String
+struct AppPreset:Identifiable {
+    let id:String;let name:String;let url:String;let icon:String
 }
-
-let appPresets: [AppPreset] = [
-    .init(id: "settings", name: "設定", scheme: "App-Prefs:", icon: "gear"),
-    .init(id: "camera", name: "カメラ", scheme: "camera:", icon: "camera"),
-    .init(id: "photos", name: "写真", scheme: "photos-redirect:", icon: "photo"),
-    .init(id: "maps", name: "マップ", scheme: "maps:", icon: "map"),
-    .init(id: "music", name: "ミュージック", scheme: "music:", icon: "music.note"),
-    .init(id: "safari", name: "Safari", scheme: "https://www.apple.com", icon: "safari"),
-    .init(id: "phone", name: "電話", scheme: "tel:", icon: "phone"),
-    .init(id: "messages", name: "メッセージ", scheme: "sms:", icon: "message")
+private let appPresets:[AppPreset]=[
+    .init(id:"safari",name:"Safari（Web）",url:"https://www.apple.com",icon:"safari"),
+    .init(id:"maps",name:"マップ",url:"maps://",icon:"map"),
+    .init(id:"settings",name:"設定",url:"app-settings:",icon:"gear"),
+    .init(id:"phone",name:"電話",url:"tel:",icon:"phone"),
+    .init(id:"mail",name:"メール",url:"mailto:",icon:"envelope"),
+    .init(id:"messages",name:"メッセージ",url:"sms:",icon:"message")
 ]
-
-// MARK: - Store
-
-@MainActor
-final class PanelStore: ObservableObject {
-
-    @Published var buttons: [PanelButton] = [] {
-        didSet { save() }
+@MainActor final class PanelStore:ObservableObject {
+    @Published var buttons:[PanelButton]=[] { didSet{save()} }
+    private let key="QuickPanel.Buttons.v2"
+    init(){load()}
+    func load(){
+        guard let data=UserDefaults.standard.data(forKey:key),let decoded=try? JSONDecoder().decode([PanelButton].self,from:data) else{return}
+        buttons=decoded
     }
-
-    private let key = "QuickPanel.Buttons.v2"
-
-    init() {
-        load()
+    func save(){guard let data=try? JSONEncoder().encode(buttons) else{return};UserDefaults.standard.set(data,forKey:key)}
+    func add(_ button:PanelButton){
+        var value=button;value.id=UUID()
+        let p=firstFree(column:value.column,row:value.row,size:value.size,excluding:nil)
+        value.column=p.0;value.row=p.1;buttons.append(value)
     }
-
-    func load() {
-        guard let data = UserDefaults.standard.data(forKey: key) else {
-            return
-        }
-
-        if let decoded = try? JSONDecoder().decode(
-            [PanelButton].self,
-            from: data
-        ) {
-            buttons = decoded
-        }
+    func update(_ button:PanelButton){
+        guard let i=buttons.firstIndex(where:{$0.id==button.id}) else{return}
+        buttons[i]=button;normalize()
     }
-
-    func save() {
-        guard let data = try? JSONEncoder().encode(buttons) else {
-            return
-        }
-        UserDefaults.standard.set(data, forKey: key)
+    func duplicate(_ button:PanelButton){
+        var copy=button;copy.id=UUID();copy.title += " コピー"
+        let p=firstFree(column:button.column+button.size.columns,row:button.row,size:button.size,excluding:nil)
+        copy.column=p.0;copy.row=p.1;buttons.append(copy)
     }
-
-    func add(_ button: PanelButton) {
-        var new = button
-        new.id = UUID()
-
-        let position = firstFreePosition(
-            column: new.column,
-            row: new.row,
-            size: new.size,
-            excluding: nil
-        )
-
-        new.column = position.0
-        new.row = position.1
-        buttons.append(new)
+    func delete(_ button:PanelButton){buttons.removeAll{$0.id==button.id}}
+    func move(_ button:PanelButton,column:Int,row:Int){
+        guard let i=buttons.firstIndex(where:{$0.id==button.id}) else{return}
+        let p=firstFree(column:column,row:row,size:button.size,excluding:button.id)
+        buttons[i].column=p.0;buttons[i].row=p.1
     }
-
-    func update(_ button: PanelButton) {
-        guard let index = buttons.firstIndex(
-            where: { $0.id == button.id }
-        ) else { return }
-
-        buttons[index] = button
-        normalizePositions()
-    }
-
-    func duplicate(_ button: PanelButton) {
-        var copy = button
-        copy.id = UUID()
-        copy.title += " コピー"
-
-        let position = firstFreePosition(
-            column: button.column + button.size.columns,
-            row: button.row,
-            size: button.size,
-            excluding: nil
-        )
-
-        copy.column = position.0
-        copy.row = position.1
-        buttons.append(copy)
-    }
-
-    func delete(_ button: PanelButton) {
-        buttons.removeAll { $0.id == button.id }
-    }
-
-    func move(
-        _ button: PanelButton,
-        column: Int,
-        row: Int
-    ) {
-        guard let index = buttons.firstIndex(
-            where: { $0.id == button.id }
-        ) else { return }
-
-        let position = firstFreePosition(
-            column: column,
-            row: row,
-            size: button.size,
-            excluding: button.id
-        )
-
-        buttons[index].column = position.0
-        buttons[index].row = position.1
-    }
-
-    func changeSize(_ button: PanelButton, size: TileSize) {
-        guard let index = buttons.firstIndex(
-            where: { $0.id == button.id }
-        ) else { return }
-
-        buttons[index].size = size
-
-        let position = firstFreePosition(
-            column: button.column,
-            row: button.row,
-            size: size,
-            excluding: button.id
-        )
-
-        buttons[index].column = position.0
-        buttons[index].row = position.1
-    }
-
-    private func firstFreePosition(
-        column: Int,
-        row: Int,
-        size: TileSize,
-        excluding: UUID?
-    ) -> (Int, Int) {
-
-        let startColumn = min(max(0, column), 4 - size.columns)
-        let startRow = max(0, row)
-
-        for r in startRow...(startRow + 500) {
-            for c in 0...(4 - size.columns) {
-                let actualColumn = r == startRow
-                    ? max(startColumn, c)
-                    : c
-
-                if actualColumn > 4 - size.columns { continue }
-
-                if isFree(
-                    column: actualColumn,
-                    row: r,
-                    size: size,
-                    excluding: excluding
-                ) {
-                    return (actualColumn, r)
-                }
+    private func firstFree(column:Int,row:Int,size:TileSize,excluding:UUID?)->(Int,Int){
+        let startColumn=min(max(0,column),4-size.columns),startRow=max(0,row)
+        for r in startRow...(startRow+500){
+            for c in 0...(4-size.columns){
+                let actual=r==startRow ? max(startColumn,c):c
+                if actual<=4-size.columns && isFree(column:actual,row:r,size:size,excluding:excluding){return(actual,r)}
             }
         }
-
-        return (0, startRow + 501)
+        return(0,startRow+501)
     }
-
-    private func isFree(
-        column: Int,
-        row: Int,
-        size: TileSize,
-        excluding: UUID?
-    ) -> Bool {
-
+    private func isFree(column:Int,row:Int,size:TileSize,excluding:UUID?)->Bool{
         for item in buttons where item.id != excluding {
-            let horizontalOverlap =
-                column < item.column + item.size.columns &&
-                column + size.columns > item.column
-
-            let verticalOverlap =
-                row < item.row + item.size.rows &&
-                row + size.rows > item.row
-
-            if horizontalOverlap && verticalOverlap {
-                return false
-            }
+            let x=column<item.column+item.size.columns && column+size.columns>item.column
+            let y=row<item.row+item.size.rows && row+size.rows>item.row
+            if x && y{return false}
         }
-
         return true
     }
-
-    private func normalizePositions() {
-        let old = buttons
-        buttons = []
-
-        for item in old {
-            var copy = item
-
-            let position = firstFreePosition(
-                column: copy.column,
-                row: copy.row,
-                size: copy.size,
-                excluding: nil
-            )
-
-            copy.column = position.0
-            copy.row = position.1
-            buttons.append(copy)
+    private func normalize(){
+        let old=buttons;buttons=[]
+        for item in old{
+            var copy=item
+            let p=firstFree(column:copy.column,row:copy.row,size:copy.size,excluding:nil)
+            copy.column=p.0;copy.row=p.1;buttons.append(copy)
         }
     }
 }
-
-// MARK: - App
-
-@main
-struct QuickPanelApp: App {
-    var body: some Scene {
-        WindowGroup {
-            MainView()
-                .preferredColorScheme(.dark)
-        }
-    }
+@main struct QuickPanelApp:App {
+    var body:some Scene{WindowGroup{MainView().preferredColorScheme(.dark)}}
 }
 
-// MARK: - Main View
-
-struct MainView: View {
-
-    @StateObject private var store = PanelStore()
-
-    @State private var showEditor = false
-    @State private var editingButton: PanelButton?
-    @State private var isEditing = false
-
-    private let spacing: CGFloat = 10
-    private let sidePadding: CGFloat = 16
-
-    var body: some View {
-        NavigationStack {
-            GeometryReader { geometry in
-
-                let unit = (
-                    geometry.size.width
-                    - sidePadding * 2
-                    - spacing * 3
-                ) / 4
-
-                let rowHeight = unit + spacing
-
-                ScrollView {
-                    ZStack(alignment: .topLeading) {
-
-                        // 空の配置スペース
-                        Color.clear
-                            .frame(
-                                height: max(
-                                    350,
-                                    CGFloat(maxRow + 1) * rowHeight
-                                )
-                            )
-
-                        ForEach(store.buttons) { item in
-                            TileView(
-                                item: item,
-                                editing: isEditing,
-                                unit: unit,
-                                spacing: spacing,
-                                editAction: {
-                                    editingButton = item
-                                },
-                                duplicateAction: {
-                                    store.duplicate(item)
-                                },
-                                deleteAction: {
-                                    store.delete(item)
-                                },
-                                moveAction: { x, y in
-                                    let col = Int(
-                                        round(x / rowHeight)
-                                    )
-                                    let row = Int(
-                                        round(y / rowHeight)
-                                    )
-
-                                    store.move(
-                                        item,
-                                        column: col,
-                                        row: row
-                                    )
-                                }
-                            )
-                            .frame(
-                                width: CGFloat(item.size.columns) * unit
-                                    + CGFloat(item.size.columns - 1) * spacing,
-                                height: CGFloat(item.size.rows) * unit
-                                    + CGFloat(item.size.rows - 1) * spacing
-                            )
-                            .position(
-                                x: sidePadding
-                                    + CGFloat(item.column) * rowHeight
-                                    + (
-                                        CGFloat(item.size.columns) * unit
-                                        + CGFloat(item.size.columns - 1) * spacing
-                                    ) / 2,
-                                y: CGFloat(item.row) * rowHeight
-                                    + (
-                                        CGFloat(item.size.rows) * unit
-                                        + CGFloat(item.size.rows - 1) * spacing
-                                    ) / 2
-                            )
+struct MainView:View {
+    @StateObject private var panelStore=PanelStore()
+    @StateObject private var actionStore=ActionStore()
+    @State private var showAddMenu=false
+    @State private var showAppEditor=false
+    @State private var editingButton:PanelButton?
+    @State private var editingWorkflow:ActionWorkflow?
+    @State private var isEditing=false
+    @State private var showResult=false
+    @State private var resultText=""
+    private let spacing:CGFloat=10
+    private let sidePadding:CGFloat=16
+    var body:some View{
+        NavigationStack{
+            GeometryReader{geometry in
+                let unit=(geometry.size.width-sidePadding*2-spacing*3)/4
+                let rowHeight=unit+spacing
+                ScrollView{
+                    ZStack(alignment:.topLeading){
+                        Color.clear.frame(height:max(350,CGFloat(maxRow+1)*rowHeight))
+                        ForEach(panelStore.buttons){item in
+                            TileView(item:item,editing:isEditing,
+                                editAction:{edit(item)},
+                                duplicateAction:{panelStore.duplicate(item)},
+                                deleteAction:{panelStore.delete(item)},
+                                moveAction:{x,y in panelStore.move(item,column:Int(round(x/rowHeight)),row:Int(round(y/rowHeight)))},
+                                runAction:{run(item)})
+                            .frame(width:CGFloat(item.size.columns)*unit+CGFloat(item.size.columns-1)*spacing,
+                                   height:CGFloat(item.size.rows)*unit+CGFloat(item.size.rows-1)*spacing)
+                            .position(x:sidePadding+CGFloat(item.column)*rowHeight+(CGFloat(item.size.columns)*unit+CGFloat(item.size.columns-1)*spacing)/2,
+                                      y:CGFloat(item.row)*rowHeight+(CGFloat(item.size.rows)*unit+CGFloat(item.size.rows-1)*spacing)/2)
                         }
-                    }
-                    .padding(.top, 12)
-                    .padding(.bottom, 30)
+                    }.padding(.top,12).padding(.bottom,30)
                 }
             }
-            .background(Color(red: 0.055, green: 0.065, blue: 0.085))
+            .background(Color(red:0.055,green:0.065,blue:0.085))
             .navigationTitle("QuickPanel")
-            .toolbar {
-
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        isEditing.toggle()
-                    } label: {
-                        Image(systemName: "square.grid.2x2")
-                            .font(.title2)
-                            .foregroundStyle(
-                                isEditing ? .orange : .white
-                            )
+            .toolbar{
+                ToolbarItem(placement:.topBarLeading){
+                    Button{isEditing.toggle()}label:{Image(systemName:"square.grid.2x2").font(.title2).foregroundStyle(isEditing ? .orange:.white)}
+                }
+                ToolbarItem(placement:.topBarTrailing){
+                    Button{showAddMenu=true}label:{Image(systemName:"plus.circle.fill").font(.title2).foregroundStyle(.white)}
+                }
+            }
+            .confirmationDialog("タイルを追加",isPresented:$showAddMenu,titleVisibility:.visible){
+                Button("アプリ・URLタイル"){showAppEditor=true}
+                Button("アクションタイルを作成"){editingWorkflow=ActionWorkflow(title:"新しいアクション")}
+                Button("キャンセル",role:.cancel){}
+            }message:{Text("アプリを開くか、複数の処理を組み合わせるアクションを作成する")}
+            .sheet(isPresented:$showAppEditor){AppTileEditor{panelStore.add($0)}}
+            .sheet(item:$editingButton){button in AppTileEditor(existing:button){panelStore.update($0)}}
+            .sheet(item:$editingWorkflow){workflow in
+                WorkflowEditorView(existing:workflow){saved in
+                    actionStore.saveWorkflow(saved)
+                    if let tile=panelStore.buttons.first(where:{$0.kind == .workflow && $0.target==saved.id.uuidString}){
+                        var updated=tile;updated.title=saved.title;updated.icon=saved.icon;updated.colorIndex=saved.colorIndex
+                        panelStore.update(updated)
+                    }else{
+                        panelStore.add(PanelButton(title:saved.title,kind:.workflow,target:saved.id.uuidString,icon:saved.icon,colorIndex:saved.colorIndex))
                     }
                 }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        editingButton = nil
-                        showEditor = true
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.white)
-                    }
+            }
+            .overlay{
+                if panelStore.buttons.isEmpty{
+                    ContentUnavailableView("タイルがありません",systemImage:"square.grid.2x2",description:Text("右上の＋からアプリまたはアクションを追加してね"))
                 }
             }
-            .sheet(isPresented: $showEditor) {
-                ButtonEditorView { button in
-                    store.add(button)
-                }
-            }
-            .sheet(item: $editingButton) { button in
-                ButtonEditorView(existing: button) { updated in
-                    store.update(updated)
-                }
-            }
-            .overlay {
-                if store.buttons.isEmpty {
-                    ContentUnavailableView(
-                        "ボタンがありません",
-                        systemImage: "square.grid.2x2",
-                        description: Text("右上の＋から追加してね")
-                    )
-                }
-            }
+            .alert("実行結果",isPresented:$showResult){Button("OK",role:.cancel){}}message:{Text(resultText)}
         }
     }
-
-    private var maxRow: Int {
-        store.buttons.map {
-            $0.row + $0.size.rows
-        }.max() ?? 3
+    private var maxRow:Int{panelStore.buttons.map{$0.row+$0.size.rows}.max() ?? 3}
+    private func edit(_ item:PanelButton){
+        if item.kind == .workflow,let id=UUID(uuidString:item.target),let workflow=actionStore.workflow(id:id){editingWorkflow=workflow}
+        else{editingButton=item}
+    }
+    private func run(_ item:PanelButton){
+        if item.kind == .workflow,let id=UUID(uuidString:item.target),let workflow=actionStore.workflow(id:id){
+            Task{
+                let report=await ActionEngine(store:actionStore).run(workflow)
+                let errors=report.logs.filter{$0.status == .failure}
+                resultText=errors.isEmpty ? "「\(workflow.title)」を実行したよ。\n\(report.logs.count)件の処理が完了。":errors.map{"\($0.actionTitle)：\($0.message)"}.joined(separator:"\n")
+                showResult=true
+            }
+        }else if item.kind == .shortcut || item.kind == .setting{
+            var c=URLComponents();c.scheme="shortcuts";c.host="run-shortcut";c.queryItems=[URLQueryItem(name:"name",value:item.target)]
+            if let url=c.url{UIApplication.shared.open(url)}
+        }else if let url=URL(string:item.target){UIApplication.shared.open(url)}
     }
 }
 
-// MARK: - Tile
-
-struct TileView: View {
-
-    let item: PanelButton
-    let editing: Bool
-    let unit: CGFloat
-    let spacing: CGFloat
-
-    let editAction: () -> Void
-    let duplicateAction: () -> Void
-    let deleteAction: () -> Void
-    let moveAction: (CGFloat, CGFloat) -> Void
-
-    @Environment(\.openURL) private var openURL
-
-    @State private var dragOffset: CGSize = .zero
-
-    private let colors: [Color] = [
-        Color(red: 0.14, green: 0.23, blue: 0.34),
-        Color(red: 0.18, green: 0.29, blue: 0.24),
-        Color(red: 0.29, green: 0.23, blue: 0.36),
-        Color(red: 0.35, green: 0.27, blue: 0.18),
-        Color(red: 0.17, green: 0.29, blue: 0.34)
+struct TileView:View {
+    let item:PanelButton
+    let editing:Bool
+    let editAction:()->Void
+    let duplicateAction:()->Void
+    let deleteAction:()->Void
+    let moveAction:(CGFloat,CGFloat)->Void
+    let runAction:()->Void
+    @State private var dragOffset:CGSize = .zero
+    private let colors:[Color]=[
+        Color(red:0.14,green:0.23,blue:0.34),Color(red:0.18,green:0.29,blue:0.24),
+        Color(red:0.29,green:0.23,blue:0.36),Color(red:0.35,green:0.27,blue:0.18),
+        Color(red:0.17,green:0.29,blue:0.34)
     ]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-
-            HStack {
-                Image(systemName: item.icon)
-                    .font(.system(size: 27, weight: .medium))
-
-                Spacer()
-
-                if editing {
-                    Menu {
-                        Button("編集", systemImage: "pencil") {
-                            editAction()
-                        }
-
-                        Button("複製", systemImage: "plus.square.on.square") {
-                            duplicateAction()
-                        }
-
-                        Divider()
-
-                        Button(
-                            "削除",
-                            systemImage: "trash",
-                            role: .destructive
-                        ) {
-                            deleteAction()
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.title2)
+    var body:some View{
+        Button{if !editing{runAction()}}label:{
+            VStack(alignment:.leading,spacing:10){
+                HStack{
+                    Image(systemName:item.icon).font(.system(size:27,weight:.medium))
+                    Spacer()
+                    if editing{
+                        Menu{
+                            Button("編集",systemImage:"pencil",action:editAction)
+                            Button("複製",systemImage:"plus.square.on.square",action:duplicateAction)
+                            Divider()
+                            Button("削除",systemImage:"trash",role:.destructive,action:deleteAction)
+                        }label:{Image(systemName:"ellipsis.circle").font(.title2)}
                     }
                 }
+                Spacer(minLength:2)
+                Text(item.title).font(.system(size:16,weight:.semibold)).lineLimit(2)
+                Text(item.kind.rawValue+" · "+item.size.rawValue).font(.system(size:10)).foregroundStyle(.white.opacity(0.65))
             }
-
-            Spacer(minLength: 2)
-
-            Text(item.title)
-                .font(.system(size: 16, weight: .semibold))
-                .lineLimit(2)
-
-            Text(item.kind.rawValue + "  ·  " + item.size.rawValue)
-                .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(0.65))
+            .foregroundStyle(.white).padding(14).frame(maxWidth:.infinity,maxHeight:.infinity)
+            .background(colors[abs(item.colorIndex)%colors.count]).clipShape(RoundedRectangle(cornerRadius:20))
+            .overlay{if editing{RoundedRectangle(cornerRadius:20).stroke(.white.opacity(0.35),style:StrokeStyle(lineWidth:1,dash:[5]))}}
         }
-        .foregroundStyle(.white)
-        .padding(14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            colors[item.colorIndex % colors.count]
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .overlay {
-            if editing {
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(.white.opacity(0.35), style: StrokeStyle(
-                        lineWidth: 1,
-                        dash: [5]
-                    ))
-            }
-        }
-        .offset(dragOffset)
-        .gesture(
-            editing
-            ? DragGesture()
-                .onChanged { value in
-                    dragOffset = value.translation
-                }
-                .onEnded { value in
-                    moveAction(
-                        value.translation.width,
-                        value.translation.height
-                    )
-                    dragOffset = .zero
-                }
-            : nil
-        )
-        .onTapGesture {
-            if !editing {
-                execute()
-            }
-        }
-        .contextMenu {
-            Button("編集", systemImage: "pencil") {
-                editAction()
-            }
-
-            Button("複製", systemImage: "plus.square.on.square") {
-                duplicateAction()
-            }
-
-            Button("削除", systemImage: "trash", role: .destructive) {
-                deleteAction()
-            }
-        }
-    }
-
-    private func execute() {
-        switch item.kind {
-
-        case .app:
-            guard let url = URL(string: item.target) else { return }
-            openURL(url)
-
-        case .shortcut, .setting:
-            var components = URLComponents()
-            components.scheme = "shortcuts"
-            components.host = "run-shortcut"
-            components.queryItems = [
-                URLQueryItem(name: "name", value: item.target)
-            ]
-
-            if let url = components.url {
-                openURL(url)
-            }
+        .buttonStyle(.plain).offset(dragOffset)
+        .simultaneousGesture(DragGesture(minimumDistance:12).onChanged{v in if editing{dragOffset=v.translation}}.onEnded{v in if editing{moveAction(v.translation.width,v.translation.height)};dragOffset = .zero})
+        .contextMenu{
+            Button("編集",systemImage:"pencil",action:editAction)
+            Button("複製",systemImage:"plus.square.on.square",action:duplicateAction)
+            Button("削除",systemImage:"trash",role:.destructive,action:deleteAction)
         }
     }
 }
 
-// MARK: - Add / Edit
-
-struct ButtonEditorView: View {
-
-    var existing: PanelButton? = nil
-    let onSave: (PanelButton) -> Void
-
+struct AppTileEditor:View {
+    var existing:PanelButton?=nil
+    let onSave:(PanelButton)->Void
     @Environment(\.dismiss) private var dismiss
-
-    @State private var title = ""
-    @State private var kind: ButtonKind = .app
-    @State private var target = ""
-    @State private var icon = "app"
-    @State private var colorIndex = 0
-    @State private var size: TileSize = .small
-    @State private var column = 0
-    @State private var row = 0
-
-    private let icons = [
-        "app", "camera", "photo", "wifi",
-        "bluetooth", "gearshape", "moon",
-        "sun.max", "bolt.fill", "music.note",
-        "map", "house", "message", "phone",
-        "globe", "cloud", "timer", "heart",
-        "video", "car", "location", "bell"
-    ]
-
-    var body: some View {
-        NavigationStack {
-            Form {
-
-                Section("基本情報") {
-                    TextField("ボタン名", text: $title)
-
-                    Picker("種類", selection: $kind) {
-                        ForEach(ButtonKind.allCases) { value in
-                            Text(value.rawValue).tag(value)
-                        }
-                    }
-                    .onChange(of: kind) {
-                        target = ""
+    @State private var title=""
+    @State private var target=""
+    @State private var icon="app"
+    @State private var color=0
+    @State private var size:TileSize = .small
+    @State private var column=0
+    @State private var row=0
+    var body:some View{
+        NavigationStack{
+            Form{
+                Section("基本情報"){
+                    TextField("タイル名",text:$title)
+                    TextField("URL・アプリの起動先",text:$target).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Text("iOSはインストール済みアプリ一覧を一般アプリに公開していないため、候補またはアプリ提供元のURLを指定してね。").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("候補"){
+                    ForEach(appPresets){preset in
+                        Button{
+                            target=preset.url;icon=preset.icon
+                            if title.isEmpty{title=preset.name}
+                        }label:{
+                            HStack{Image(systemName:preset.icon).frame(width:28);Text(preset.name);Spacer();if target==preset.url{Image(systemName:"checkmark")}}
+                        }.foregroundStyle(.primary)
                     }
                 }
-
-                if kind == .app {
-                    Section("アプリ候補") {
-                        ForEach(appPresets) { preset in
-                            Button {
-                                target = preset.scheme
-                                if title.isEmpty {
-                                    title = preset.name
-                                }
-                                icon = preset.icon
-                            } label: {
-                                HStack {
-                                    Image(systemName: preset.icon)
-                                        .frame(width: 28)
-
-                                    Text(preset.name)
-
-                                    Spacer()
-
-                                    if target == preset.scheme {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(.blue)
-                                    }
-                                }
-                            }
-                            .foregroundStyle(.primary)
-                        }
-                    }
-
-                    Section("アプリ起動URL") {
-                        TextField(
-                            "例：myapp://",
-                            text: $target
-                        )
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-
-                        Text("候補にないアプリは、アプリ提供元が公開しているURLスキームを入力してね。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Section(
-                        kind == .setting
-                            ? "設定操作用ショートカット"
-                            : "ショートカット"
-                    ) {
-                        TextField(
-                            "ショートカット名",
-                            text: $target
-                        )
-
-                        Text("ショートカットアプリで作成した名前を正確に入力してね。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        Button("ショートカットアプリを開く") {
-                            if let url = URL(string: "shortcuts://") {
-                                UIApplication.shared.open(url)
-                            }
+                Section("タイルサイズ"){
+                    Picker("サイズ",selection:$size){ForEach(TileSize.allCases){Text($0.rawValue).tag($0)}}.pickerStyle(.segmented)
+                }
+                Section("配置位置"){
+                    Stepper("列：\(column+1)",value:$column,in:0...(4-size.columns))
+                    Stepper("行：\(row+1)",value:$row,in:0...100)
+                }
+                Section("アイコン"){
+                    let icons=["app","camera","photo","gearshape","moon","sun.max","bolt.fill","music.note","map","house","message","phone","globe","cloud","timer","heart","video","car","location","bell","wifi","bluetooth"]
+                    LazyVGrid(columns:Array(repeating:GridItem(.flexible()),count:6)){
+                        ForEach(icons,id:\.self){value in
+                            Button{icon=value}label:{Image(systemName:value).font(.title2).frame(maxWidth:.infinity).padding(8).background(icon==value ? Color.blue.opacity(0.35):Color.clear).clipShape(RoundedRectangle(cornerRadius:8))}.buttonStyle(.plain)
                         }
                     }
                 }
-
-                Section("タイルサイズ") {
-                    Picker("サイズ", selection: $size) {
-                        ForEach(TileSize.allCases) { value in
-                            Text(value.rawValue).tag(value)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                Section("配置位置") {
-                    Stepper(
-                        "列：\(column + 1)",
-                        value: $column,
-                        in: 0...(4 - size.columns)
-                    )
-
-                    Stepper(
-                        "行：\(row + 1)",
-                        value: $row,
-                        in: 0...100
-                    )
-                }
-
-                Section("アイコン") {
-                    LazyVGrid(
-                        columns: Array(
-                            repeating: GridItem(.flexible()),
-                            count: 6
-                        )
-                    ) {
-                        ForEach(icons, id: \.self) { value in
-                            Button {
-                                icon = value
-                            } label: {
-                                Image(systemName: value)
-                                    .font(.title2)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(8)
-                                    .background(
-                                        icon == value
-                                            ? Color.blue.opacity(0.35)
-                                            : Color.clear
-                                    )
-                                    .clipShape(RoundedRectangle(
-                                        cornerRadius: 8
-                                    ))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                Section("カラー") {
-                    Picker("カラー", selection: $colorIndex) {
-                        Text("ブルー").tag(0)
-                        Text("グリーン").tag(1)
-                        Text("パープル").tag(2)
-                        Text("オレンジ").tag(3)
-                        Text("シアン").tag(4)
-                    }
+                Section("カラー"){
+                    Picker("カラー",selection:$color){Text("ブルー").tag(0);Text("グリーン").tag(1);Text("パープル").tag(2);Text("オレンジ").tag(3);Text("シアン").tag(4)}
                 }
             }
-            .navigationTitle(existing == nil ? "ボタン追加" : "ボタン編集")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("キャンセル") {
+            .navigationTitle(existing == nil ? "アプリタイル追加":"タイル編集").navigationBarTitleDisplayMode(.inline)
+            .toolbar{
+                ToolbarItem(placement:.cancellationAction){Button("キャンセル"){dismiss()}}
+                ToolbarItem(placement:.confirmationAction){
+                    Button("保存"){
+                        onSave(PanelButton(id:existing?.id ?? UUID(),title:title.trimmingCharacters(in:.whitespacesAndNewlines),kind:existing?.kind ?? .app,target:target.trimmingCharacters(in:.whitespacesAndNewlines),icon:icon,colorIndex:color,size:size,column:column,row:row))
                         dismiss()
-                    }
-                }
-
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        let button = PanelButton(
-                            id: existing?.id ?? UUID(),
-                            title: title.trimmingCharacters(
-                                in: .whitespacesAndNewlines
-                            ),
-                            kind: kind,
-                            target: target.trimmingCharacters(
-                                in: .whitespacesAndNewlines
-                            ),
-                            icon: icon,
-                            colorIndex: colorIndex,
-                            size: size,
-                            column: column,
-                            row: row
-                        )
-
-                        onSave(button)
-                        dismiss()
-                    }
-                    .disabled(
-                        title.trimmingCharacters(
-                            in: .whitespacesAndNewlines
-                        ).isEmpty ||
-                        target.trimmingCharacters(
-                            in: .whitespacesAndNewlines
-                        ).isEmpty
-                    )
+                    }.disabled(title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || target.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
                 }
             }
-            .onAppear {
-                guard let existing else { return }
+            .onAppear{guard let existing else{return};title=existing.title;target=existing.target;icon=existing.icon;color=existing.colorIndex;size=existing.size;column=existing.column;row=existing.row}
+            .onChange(of:size){column=min(column,4-size.columns)}
+        }.preferredColorScheme(.dark)
+    }
+}
 
-                title = existing.title
-                kind = existing.kind
-                target = existing.target
-                icon = existing.icon
-                colorIndex = existing.colorIndex
-                size = existing.size
-                column = existing.column
-                row = existing.row
+struct WorkflowEditorView:View {
+    var existing:ActionWorkflow
+    let onSave:(ActionWorkflow)->Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var title=""
+    @State private var icon="bolt.fill"
+    @State private var color=0
+    @State private var actions:[ActionDefinition]=[]
+    @State private var category:ActionCategory = .appScreen
+    @State private var editingAction:ActionDefinition?
+    @State private var showActionPicker=false
+    var body:some View{
+        NavigationStack{
+            Form{
+                Section("アクション名"){
+                    TextField("例：仕事開始",text:$title)
+                    Picker("タイルアイコン",selection:$icon){
+                        ForEach(["bolt.fill","briefcase.fill","house.fill","sun.max.fill","moon.fill","wifi","bell.fill","globe","doc.text","gearshape.fill"],id:\.self){Image(systemName:$0).tag($0)}
+                    }
+                    Picker("追加するカテゴリー",selection:$category){ForEach(ActionCategory.allCases){Text($0.title).tag($0)}}
+                }
+                Section("実行する処理"){
+                    ForEach(Array(actions.enumerated()),id:\.element.id){index,action in
+                        Button{editingAction=action}label:{
+                            HStack(spacing:12){
+                                Text("\(index+1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width:22)
+                                Image(systemName:ActionCatalog.descriptor(for:action.type)?.category.symbol ?? "bolt").frame(width:24)
+                                VStack(alignment:.leading,spacing:3){
+                                    Text(action.title).foregroundStyle(.primary)
+                                    Text(action.category.title).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName:"chevron.right").font(.caption).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .onDelete{actions.remove(atOffsets:$0)}
+                    .onMove{actions.move(fromOffsets:$0,toOffset:$1)}
+                    Button{showActionPicker=true}label:{Label("選択したカテゴリーから追加",systemImage:"plus.circle.fill")}
+                }
+                Section("タイルカラー"){
+                    Picker("カラー",selection:$color){Text("ブルー").tag(0);Text("グリーン").tag(1);Text("パープル").tag(2);Text("オレンジ").tag(3);Text("シアン").tag(4)}
+                }
+                Section{
+                    Text("上から順番に実行されるよ。アプリ起動や設定画面を開く処理は、基本的に最後に置いてね。").font(.caption).foregroundStyle(.secondary)
+                }
             }
-            .onChange(of: size) {
-                column = min(column, 4 - size.columns)
+            .navigationTitle("アクションを作成").navigationBarTitleDisplayMode(.inline)
+            .toolbar{
+                ToolbarItem(placement:.cancellationAction){Button("キャンセル"){dismiss()}}
+                ToolbarItem(placement:.principal){EditButton()}
+                ToolbarItem(placement:.confirmationAction){
+                    Button("保存"){
+                        var workflow=existing
+                        workflow.title=title.trimmingCharacters(in:.whitespacesAndNewlines)
+                        workflow.icon=icon;workflow.colorIndex=color;workflow.actions=actions;workflow.touch()
+                        onSave(workflow);dismiss()
+                    }.disabled(title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || actions.isEmpty)
+                }
+            }
+            .confirmationDialog("追加するアクション",isPresented:$showActionPicker,titleVisibility:.visible){
+                ForEach(ActionCatalog.actions(in:category)){descriptor in
+                    Button(descriptor.title){
+                        let action=makeAction(descriptor);actions.append(action);editingAction=action
+                    }
+                }
+                Button("キャンセル",role:.cancel){}
+            }message:{Text("「\(category.title)」のアクションを選んでね。")}
+            .sheet(item:$editingAction){action in
+                ActionParameterEditor(action:action){updated in
+                    if let i=actions.firstIndex(where:{$0.id==updated.id}){actions[i]=updated}
+                }
+            }
+            .onAppear{title=existing.title;icon=existing.icon;color=existing.colorIndex;actions=existing.actions}
+        }.preferredColorScheme(.dark)
+    }
+    private func makeAction(_ descriptor:ActionDescriptor)->ActionDefinition{
+        var params:[String:ActionValue]=[:]
+        for field in descriptor.fields{
+            switch field.kind{
+            case .choice,.systemSettingPicker,.appPicker:params[field.key] = .string(field.options.first?.value ?? "")
+            case .toggle:params[field.key] = .bool(false)
+            case .number,.duration:params[field.key] = .string("1")
+            default:params[field.key] = .string("")
             }
         }
-        .preferredColorScheme(.dark)
+        return ActionDefinition(type:descriptor.type,category:descriptor.category,title:descriptor.title,parameters:params)
+    }
+}
+
+struct ActionParameterEditor:View {
+    @State var action:ActionDefinition
+    let onSave:(ActionDefinition)->Void
+    @Environment(\.dismiss) private var dismiss
+    private var descriptor:ActionDescriptor?{ActionCatalog.descriptor(for:action.type)}
+    var body:some View{
+        NavigationStack{
+            Form{
+                Section{Text(action.title).font(.headline);Text(descriptor?.description ?? "").font(.caption).foregroundStyle(.secondary)}
+                if let descriptor{ForEach(descriptor.fields){field in fieldEditor(field)}}
+                Section("エラー時の動作"){
+                    Picker("処理に失敗したら",selection:$action.failurePolicy){ForEach(ActionFailurePolicy.allCases){Text($0.title).tag($0)}}
+                }
+                Section("実行結果の保存（任意）"){
+                    TextField("変数名",text:Binding(get:{action.outputVariable ?? ""},set:{action.outputVariable=$0.isEmpty ? nil:$0}))
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                }
+            }
+            .navigationTitle("アクション設定").navigationBarTitleDisplayMode(.inline)
+            .toolbar{
+                ToolbarItem(placement:.cancellationAction){Button("戻る"){dismiss()}}
+                ToolbarItem(placement:.confirmationAction){Button("完了"){onSave(action);dismiss()}}
+            }
+        }.preferredColorScheme(.dark)
+    }
+    @ViewBuilder private func fieldEditor(_ field:ActionFieldSchema)->some View{
+        switch field.kind{
+        case .choice,.systemSettingPicker,.appPicker:
+            Picker(field.title,selection:stringBinding(field.key)){ForEach(field.options){Text($0.title).tag($0.value)}}
+        case .toggle:
+            Toggle(field.title,isOn:Binding(get:{action.parameters[field.key] == .bool(true)},set:{action.parameters[field.key] = .bool($0)}))
+        case .multilineText:
+            Section(field.title){TextEditor(text:stringBinding(field.key)).frame(minHeight:100)}
+        case .number,.duration:
+            TextField(field.title,text:stringBinding(field.key)).keyboardType(.decimalPad)
+        case .url:
+            TextField(field.title,text:stringBinding(field.key),prompt:Text(field.placeholder ?? "https://"))
+                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+        case .variableName:
+            TextField(field.title,text:stringBinding(field.key),prompt:Text(field.placeholder ?? "variable"))
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+        case .shortText:
+            TextField(field.title,text:stringBinding(field.key),prompt:Text(field.placeholder ?? "入力"))
+        }
+    }
+    private func stringBinding(_ key:String)->Binding<String>{
+        Binding(get:{action.parameters[key]?.displayString ?? ""},set:{action.parameters[key] = .string($0)})
     }
 }
